@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: black
+      POSTGRES_PASSWORD: black
+      POSTGRES_DB: todos
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  black:
+    build: ./black
+    environment:
+      DATABASE_URL: postgres://black:black@db:5432/todos?sslmode=disable
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  red:
+    build: ./red
+    ports:
+      - "3000:3000"
+    depends_on:
+      - black
+
+volumes:
+  pgdata:
