@@ -2,28 +2,72 @@ services:
   db:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: black
-      POSTGRES_PASSWORD: black
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
       POSTGRES_DB: todos
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d todos"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
 
-  black:
-    build: ./black
+  # Two identical green API servers. Only one gets traffic at a time
+  # (nginx/active.conf decides which). deploy.sh rebuilds the idle one.
+  green-1:
+    build: ./server
     environment:
-      DATABASE_URL: postgres://black:black@db:5432/todos?sslmode=disable
-    ports:
-      - "8080:8080"
+      DATABASE_URL: postgres://app:app@db:5432/todos?sslmode=disable
+      COLOR: green-1
+      VERSION: ${GREEN_1_VERSION:-v1}
+    healthcheck:
+      test: ["CMD", "/server", "-healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    stop_grace_period: 15s
     restart: unless-stopped
 
-  red:
-    build: ./red
-    ports:
-      - "3000:3000"
+  green-2:
+    build: ./server
+    environment:
+      DATABASE_URL: postgres://app:app@db:5432/todos?sslmode=disable
+      COLOR: green-2
+      VERSION: ${GREEN_2_VERSION:-v1}
+    healthcheck:
+      test: ["CMD", "/server", "-healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
     depends_on:
-      - black
+      db:
+        condition: service_healthy
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  # The only public entry point for the API. Switching servers = changing
+  # which one nginx/active.conf names, then a graceful `nginx -s reload`.
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d:ro
+    restart: unless-stopped
+
+  # The blue client: calls the API through nginx and shows UP/DOWN + which green answered.
+  blue:
+    build: ./client
+    ports:
+      - "3001:3000"
+    depends_on:
+      - nginx
 
 volumes:
   pgdata:

@@ -1,14 +1,16 @@
 import { render } from "solid-js/web";
 import { createSignal, For, onCleanup } from "solid-js";
 
-const API = import.meta.env.VITE_BLACK_URL ?? "http://localhost:8080";
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 const INTERVAL_MS = 500;
 const WINDOW = 120; // points shown on the graph
 
-type Log = { t: number; op: string; status: number | "DOWN"; ms: number };
+type Log = { t: number; op: string; status: number | "DOWN"; ms: number; by?: string };
 type Point = { avg: number; up: boolean };
 
 const known: number[] = []; // ids we've created, for get/update/delete
+// two shades of green so you can tell the servers apart
+const COLORS: Record<string, string> = { "green-1": "#4ade80", "green-2": "#a3e635" };
 const pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
 
 async function randomOp(): Promise<{ op: string; res: Response }> {
@@ -46,21 +48,27 @@ function App() {
   const [logs, setLogs] = createSignal<Log[]>([]);
   const [points, setPoints] = createSignal<Point[]>([]);
   const [up, setUp] = createSignal(true);
-  let total = 0, count = 0;
+  const [stats, setStats] = createSignal({ total: 0, count: 0 });
+  const [serving, setServing] = createSignal("");
 
   const tick = async () => {
     const start = performance.now();
     let entry: Log;
     try {
       const { op, res } = await randomOp();
-      entry = { t: Date.now(), op, status: res.status, ms: performance.now() - start };
+      const color = res.headers.get("X-Served-By");
+      const version = res.headers.get("X-Version");
+      const by = color ? `${color} ${version ?? ""}`.trim() : undefined;
+      entry = { t: Date.now(), op, status: res.status, ms: performance.now() - start, by };
       setUp(res.status < 500);
+      if (by) setServing(by);
     } catch {
       entry = { t: Date.now(), op: "request failed", status: "DOWN", ms: performance.now() - start };
       setUp(false);
     }
     console.log(entry);
-    if (entry.status !== "DOWN") { total += entry.ms; count++; }
+    if (entry.status !== "DOWN") setStats((s) => ({ total: s.total + entry.ms, count: s.count + 1 }));
+    const { total, count } = stats();
     setLogs((l) => [entry, ...l].slice(0, 50));
     setPoints((p) => [...p, { avg: count ? total / count : 0, up: up() }].slice(-WINDOW));
   };
@@ -77,10 +85,16 @@ function App() {
   return (
     <div style={{ padding: "16px", "max-width": "840px", margin: "auto" }}>
       <h2>
-        black is{" "}
+        <span style={{ color: "#60a5fa" }}>blue client</span> - API is{" "}
         <span style={{ color: up() ? "#4ade80" : "#f87171" }}>{up() ? "UP" : "DOWN"}</span>
       </h2>
-      <div>avg response: {(count ? total / count : 0).toFixed(1)} ms over {count} ok requests</div>
+      <div>
+        serving:{" "}
+        <b style={{ color: COLORS[serving().split(" ")[0]] ?? "#ddd" }}>{serving() || "-"}</b>
+      </div>
+      <div>
+        avg response: {(stats().count ? stats().total / stats().count : 0).toFixed(1)} ms over {stats().count} ok requests
+      </div>
 
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: "#1a1a1a", "margin-top": "12px" }}>
         <For each={points()}>
@@ -94,7 +108,8 @@ function App() {
       <For each={logs()}>
         {(l) => (
           <div style={{ color: l.status === "DOWN" || (l.status as number) >= 500 ? "#f87171" : "#ddd" }}>
-            {new Date(l.t).toLocaleTimeString()} {String(l.status).padEnd(4)} {l.ms.toFixed(1).padStart(7)}ms {l.op}
+            {new Date(l.t).toLocaleTimeString()} {String(l.status).padEnd(4)} {l.ms.toFixed(1).padStart(7)}ms {l.op}{" "}
+            <span style={{ color: COLORS[(l.by ?? "").split(" ")[0]] ?? "#888" }}>{l.by ? `[${l.by}]` : ""}</span>
           </div>
         )}
       </For>
